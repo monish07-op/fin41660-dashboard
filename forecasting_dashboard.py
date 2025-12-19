@@ -608,24 +608,22 @@ st.subheader("📊 In-Sample Performance Comparison")
 # Calculate metrics for ARIMA (in-sample)
 try:
     arima_fitted = arima_model.fittedvalues
-    arima_actual = df['Returns'].iloc[-len(arima_fitted):]
+    arima_actual = train_df['Returns'].iloc[-len(arima_fitted):].values
     
     arima_mae = np.mean(np.abs(arima_actual - arima_fitted))
     arima_rmse = np.sqrt(np.mean((arima_actual - arima_fitted)**2))
-    arima_mape = np.mean(np.abs((arima_actual - arima_fitted) / arima_actual.replace(0, np.nan))) * 100
     
-    # OLS fitted values
+    # OLS fitted values (training data)
     ols_fitted = ols_model.fittedvalues
-    ols_actual = ols_df['Returns']
+    ols_actual = train_ols['Returns']
     
     ols_mae = np.mean(np.abs(ols_actual - ols_fitted))
     ols_rmse = np.sqrt(np.mean((ols_actual - ols_fitted)**2))
-    ols_mape = np.mean(np.abs((ols_actual - ols_fitted) / ols_actual.replace(0, np.nan))) * 100
     
     comparison_df = pd.DataFrame({
-        'Metric': ['MAE', 'RMSE', 'MAPE (%)'],
-        'OLS': [f"{ols_mae:.4f}", f"{ols_rmse:.4f}", f"{ols_mape:.2f}"],
-        'ARIMA': [f"{arima_mae:.4f}", f"{arima_rmse:.4f}", f"{arima_mape:.2f}"]
+        'Metric': ['MAE (In-Sample)', 'RMSE (In-Sample)', 'MAE (Out-of-Sample)', 'RMSE (Out-of-Sample)'],
+        'OLS': [f"{ols_mae:.4f}", f"{ols_rmse:.4f}", f"{ols_mae_test:.4f}", f"{ols_rmse_test:.4f}"],
+        'ARIMA': [f"{arima_mae:.4f}", f"{arima_rmse:.4f}", f"{arima_mae_test:.4f}", f"{arima_rmse_test:.4f}"]
     })
     
     st.table(comparison_df)
@@ -633,6 +631,7 @@ try:
     st.markdown("""
     **Note:** 
     - Lower values indicate better fit
+    - **Out-of-sample metrics** show how well models predict unseen data (more important!)
     - OLS and ARIMA serve different purposes: OLS explains returns via market factors, ARIMA captures time-series patterns
     - GARCH forecasts volatility, not returns, so it's not directly comparable
     """)
@@ -676,4 +675,3 @@ st.markdown("""
     <p>University College Dublin | Academic Year 2025/2026</p>
 </div>
 """, unsafe_allow_html=True)
-
