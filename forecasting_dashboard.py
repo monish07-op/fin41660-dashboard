@@ -628,6 +628,47 @@ try:
     
     st.table(comparison_df)
     
+    # Diebold-Mariano Test
+    st.subheader("📈 Diebold-Mariano Test (Forecast Comparison)")
+    
+    from scipy import stats
+    
+    # Calculate forecast errors on test set
+    ols_errors = y_test.values - ols_pred_test.values
+    arima_errors = test_returns - arima_forecast_test
+    
+    # Loss differential (squared errors)
+    d = ols_errors**2 - arima_errors**2
+    
+    # DM statistic
+    d_mean = np.mean(d)
+    d_var = np.var(d, ddof=1)
+    dm_stat = d_mean / np.sqrt(d_var / len(d))
+    
+    # Two-sided p-value (normal approximation)
+    dm_pvalue = 2 * (1 - stats.norm.cdf(abs(dm_stat)))
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric("DM Statistic", f"{dm_stat:.4f}")
+    with col2:
+        st.metric("p-value", f"{dm_pvalue:.4f}")
+    
+    if dm_pvalue < 0.05:
+        if dm_stat > 0:
+            st.success("✅ **ARIMA significantly outperforms OLS** (p < 0.05)")
+        else:
+            st.success("✅ **OLS significantly outperforms ARIMA** (p < 0.05)")
+    else:
+        st.info("ℹ️ **No significant difference** between OLS and ARIMA forecasts (p ≥ 0.05)")
+    
+    st.markdown("""
+    **About Diebold-Mariano Test:**
+    - Tests whether two forecasting models have significantly different accuracy
+    - H₀: Both models have equal forecast accuracy
+    - If p < 0.05, one model is significantly better than the other
+    """)
+    
     st.markdown("""
     **Note:** 
     - Lower values indicate better fit
