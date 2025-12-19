@@ -27,7 +27,7 @@ warnings.filterwarnings('ignore')
 import statsmodels.api as sm
 from statsmodels.tsa.arima.model import ARIMA
 from statsmodels.tsa.stattools import adfuller, kpss, acf, pacf
-from statsmodels.stats.diagnostic import acorr_ljungbox
+from statsmodels.stats.diagnostic import acorr_ljungbox, het_arch
 from arch import arch_model
 
 # Set page configuration
@@ -472,14 +472,26 @@ try:
         ax_hist.set_title('Distribution of Residuals')
         st.pyplot(fig_hist)
     
-    # Ljung-Box test
-    lb_test = acorr_ljungbox(residuals, lags=[10], return_df=True)
-    st.write(f"**Ljung-Box Test (lag 10):** Q-statistic = {lb_test['lb_stat'].values[0]:.4f}, p-value = {lb_test['lb_pvalue'].values[0]:.4f}")
+    # Ljung-Box test (multiple lags)
+    st.subheader("🔬 Ljung-Box Test for Residual Autocorrelation")
     
-    if lb_test['lb_pvalue'].values[0] > 0.05:
-        st.success("✅ Residuals show no significant autocorrelation (good model fit)")
+    lb_results = []
+    for lag in [5, 10, 15, 20]:
+        lb = acorr_ljungbox(residuals, lags=[lag], return_df=True)
+        lb_results.append({
+            'Lag': lag,
+            'Q-Statistic': f"{lb['lb_stat'].values[0]:.4f}",
+            'p-value': f"{lb['lb_pvalue'].values[0]:.4f}",
+            'Result': '✅ No autocorrelation' if lb['lb_pvalue'].values[0] > 0.05 else '⚠️ Autocorrelation'
+        })
+    
+    lb_df = pd.DataFrame(lb_results)
+    st.table(lb_df)
+    
+    if all(float(r['p-value']) > 0.05 for r in lb_results):
+        st.success("✅ Residuals show no significant autocorrelation at all lags (good model fit)")
     else:
-        st.warning("⚠️ Residuals show significant autocorrelation (consider adjusting parameters)")
+        st.warning("⚠️ Some lags show significant autocorrelation (consider adjusting parameters)")
 
 except Exception as e:
     st.error(f"❌ Error fitting ARIMA model: {str(e)}")
@@ -585,6 +597,29 @@ try:
     - **Persistence (α + β) = {persistence:.4f}**: {"High persistence - volatility shocks last long" if persistence > 0.9 else "Moderate persistence - volatility mean-reverts"}
     - {"⚠️ Note: α + β close to 1 suggests volatility is highly persistent (integrated GARCH)" if persistence > 0.95 else ""}
     """)
+    
+    # ARCH-LM Test
+    st.subheader("🔬 ARCH-LM Test for Standardized Residuals")
+    st.markdown("*Tests whether GARCH model has captured all heteroskedasticity*")
+    
+    std_resid = garch_model.std_resid
+    arch_results = []
+    for lag in [5, 10]:
+        arch_test = het_arch(std_resid, nlags=lag)
+        arch_results.append({
+            'Lag': lag,
+            'LM-Statistic': f"{arch_test[0]:.4f}",
+            'p-value': f"{arch_test[1]:.4f}",
+            'Result': '✅ No ARCH effects' if arch_test[1] > 0.05 else '⚠️ ARCH effects remain'
+        })
+    
+    arch_df = pd.DataFrame(arch_results)
+    st.table(arch_df)
+    
+    if all(float(r['p-value']) > 0.05 for r in arch_results):
+        st.success("✅ GARCH model successfully captured all conditional heteroskedasticity")
+    else:
+        st.warning("⚠️ Some ARCH effects remain - consider higher order GARCH")
 
 except Exception as e:
     st.error(f"❌ Error fitting GARCH model: {str(e)}")
@@ -620,10 +655,28 @@ try:
     ols_mae = np.mean(np.abs(ols_actual - ols_fitted))
     ols_rmse = np.sqrt(np.mean((ols_actual - ols_fitted)**2))
     
+    # MAPE calculation function (avoiding division by zero)
+    def calc_mape(actual, predicted):
+        actual = np.array(actual)
+        predicted = np.array(predicted)
+        mask = actual != 0
+        if mask.sum() == 0:
+            return np.nan
+        return np.mean(np.abs((actual[mask] - predicted[mask]) / actual[mask])) * 100
+    
+    # Calculate MAPE
+    ols_mape = calc_mape(ols_actual, ols_fitted)
+    ols_mape_test = calc_mape(y_test.values, ols_pred_test.values)
+    arima_mape = calc_mape(arima_actual, arima_fitted)
+    arima_mape_test = calc_mape(test_returns, arima_forecast_test)
+    
     comparison_df = pd.DataFrame({
-        'Metric': ['MAE (In-Sample)', 'RMSE (In-Sample)', 'MAE (Out-of-Sample)', 'RMSE (Out-of-Sample)'],
-        'OLS': [f"{ols_mae:.4f}", f"{ols_rmse:.4f}", f"{ols_mae_test:.4f}", f"{ols_rmse_test:.4f}"],
-        'ARIMA': [f"{arima_mae:.4f}", f"{arima_rmse:.4f}", f"{arima_mae_test:.4f}", f"{arima_rmse_test:.4f}"]
+        'Metric': ['MAE (In-Sample)', 'RMSE (In-Sample)', 'MAPE % (In-Sample)', 
+                   'MAE (Out-of-Sample)', 'RMSE (Out-of-Sample)', 'MAPE % (Out-of-Sample)'],
+        'OLS': [f"{ols_mae:.4f}", f"{ols_rmse:.4f}", f"{ols_mape:.2f}",
+                f"{ols_mae_test:.4f}", f"{ols_rmse_test:.4f}", f"{ols_mape_test:.2f}"],
+        'ARIMA': [f"{arima_mae:.4f}", f"{arima_rmse:.4f}", f"{arima_mape:.2f}",
+                  f"{arima_mae_test:.4f}", f"{arima_rmse_test:.4f}", f"{arima_mape_test:.2f}"]
     })
     
     st.table(comparison_df)
