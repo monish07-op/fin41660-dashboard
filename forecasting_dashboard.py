@@ -26,7 +26,7 @@ warnings.filterwarnings('ignore')
 # Statistical models
 import statsmodels.api as sm
 from statsmodels.tsa.arima.model import ARIMA
-from statsmodels.tsa.stattools import adfuller, acf, pacf
+from statsmodels.tsa.stattools import adfuller, kpss, acf, pacf
 from statsmodels.stats.diagnostic import acorr_ljungbox
 from arch import arch_model
 
@@ -160,6 +160,14 @@ else:
 df = df.dropna()
 
 # =============================================================================
+# TRAIN-TEST SPLIT
+# =============================================================================
+split_ratio = 0.8
+split_idx = int(len(df) * split_ratio)
+train_df = df.iloc[:split_idx]
+test_df = df.iloc[split_idx:]
+
+# =============================================================================
 # SECTION 1: DATA OVERVIEW
 # =============================================================================
 st.header("1️⃣ Data Overview")
@@ -169,9 +177,9 @@ col1, col2, col3, col4 = st.columns(4)
 with col1:
     st.metric("Total Observations", len(df))
 with col2:
-    st.metric("Date Range", f"{df.index[0].strftime('%Y-%m-%d')}")
+    st.metric("Training Set", f"{len(train_df)} ({split_ratio*100:.0f}%)")
 with col3:
-    st.metric("Latest Price", f"${df['Price'].iloc[-1]:.2f}")
+    st.metric("Test Set", f"{len(test_df)} ({(1-split_ratio)*100:.0f}%)")
 with col4:
     total_return = ((df['Price'].iloc[-1] / df['Price'].iloc[0]) - 1) * 100
     st.metric("Total Return", f"{total_return:.2f}%")
@@ -180,9 +188,11 @@ with col4:
 st.subheader("📈 XLE Price History")
 fig_price, ax_price = plt.subplots(figsize=(12, 5))
 ax_price.plot(df.index, df['Price'], color='#1f77b4', linewidth=1.5)
+ax_price.axvline(x=train_df.index[-1], color='red', linestyle='--', linewidth=2, label='Train/Test Split')
 ax_price.set_xlabel('Date')
 ax_price.set_ylabel('Price (USD)')
 ax_price.set_title('XLE Energy ETF - Adjusted Close Price')
+ax_price.legend()
 ax_price.grid(True, alpha=0.3)
 st.pyplot(fig_price)
 
@@ -231,15 +241,27 @@ We estimate the **Capital Asset Pricing Model (CAPM)** using OLS:
 $$R_{XLE} - R_f = \\alpha + \\beta (R_{market} - R_f) + \\varepsilon$$
 
 Where we assume $R_f \\approx 0$ for simplicity (daily risk-free rate is negligible).
+
+**Note:** Model is trained on 80% of data, validated on remaining 20%.
 """)
 
-# Prepare OLS data
-ols_df = df[['Returns', 'Market_Returns']].dropna()
-y = ols_df['Returns']
-X = sm.add_constant(ols_df['Market_Returns'])
+# Prepare OLS data - use training set
+train_ols = train_df[['Returns', 'Market_Returns']].dropna()
+test_ols = test_df[['Returns', 'Market_Returns']].dropna()
 
-# Fit OLS model
-ols_model = sm.OLS(y, X).fit()
+y_train = train_ols['Returns']
+X_train = sm.add_constant(train_ols['Market_Returns'])
+
+y_test = test_ols['Returns']
+X_test = sm.add_constant(test_ols['Market_Returns'])
+
+# Fit OLS model on training data
+ols_model = sm.OLS(y_train, X_train).fit()
+
+# Predictions on test set
+ols_pred_test = ols_model.predict(X_test)
+ols_mae_test = np.mean(np.abs(y_test - ols_pred_test))
+ols_rmse_test = np.sqrt(np.mean((y_test - ols_pred_test)**2))
 
 # Display results
 col1, col2 = st.columns(2)
@@ -248,8 +270,9 @@ with col1:
     st.subheader("📊 Regression Results")
     st.write(f"**Alpha (α):** {ols_model.params['const']:.6f}")
     st.write(f"**Beta (β):** {ols_model.params['Market_Returns']:.4f}")
-    st.write(f"**R-squared:** {ols_model.rsquared:.4f}")
-    st.write(f"**Adjusted R-squared:** {ols_model.rsquared_adj:.4f}")
+    st.write(f"**R-squared (train):** {ols_model.rsquared:.4f}")
+    st.write(f"**Out-of-sample MAE:** {ols_mae_test:.4f}")
+    st.write(f"**Out-of-sample RMSE:** {ols_rmse_test:.4f}")
     
     # Coefficient table
     coef_df = pd.DataFrame({
@@ -263,10 +286,11 @@ with col1:
 with col2:
     st.subheader("📈 Scatter Plot with Regression Line")
     fig_ols, ax_ols = plt.subplots(figsize=(8, 6))
-    ax_ols.scatter(ols_df['Market_Returns'], ols_df['Returns'], alpha=0.5, s=10)
+    ax_ols.scatter(train_ols['Market_Returns'], train_ols['Returns'], alpha=0.4, s=10, label='Train', color='blue')
+    ax_ols.scatter(test_ols['Market_Returns'], test_ols['Returns'], alpha=0.4, s=10, label='Test', color='orange')
     
     # Regression line
-    x_line = np.linspace(ols_df['Market_Returns'].min(), ols_df['Market_Returns'].max(), 100)
+    x_line = np.linspace(df['Market_Returns'].min(), df['Market_Returns'].max(), 100)
     y_line = ols_model.params['const'] + ols_model.params['Market_Returns'] * x_line
     ax_ols.plot(x_line, y_line, color='red', linewidth=2, label=f'β = {ols_model.params["Market_Returns"]:.2f}')
     
@@ -291,6 +315,7 @@ st.markdown(f"""
 - **Beta = {beta_val:.4f}**: {beta_interpret}
 - **R² = {ols_model.rsquared:.4f}**: {ols_model.rsquared*100:.1f}% of XLE's return variation is explained by market movements
 - The beta is {"statistically significant" if ols_model.pvalues['Market_Returns'] < 0.05 else "not statistically significant"} at the 5% level (p-value: {ols_model.pvalues['Market_Returns']:.4f})
+- **Out-of-sample RMSE: {ols_rmse_test:.4f}** (model validation on unseen data)
 """)
 
 # =============================================================================
@@ -307,36 +332,64 @@ The ARIMA model combines:
 - **MA({arima_q})**: Moving Average component (past errors)
 """)
 
-# Stationarity test
-st.subheader("🔍 Stationarity Test (Augmented Dickey-Fuller)")
-adf_result = adfuller(df['Returns'].dropna())
-adf_df = pd.DataFrame({
-    'Metric': ['ADF Statistic', 'p-value', 'Critical Value (1%)', 'Critical Value (5%)', 'Critical Value (10%)'],
-    'Value': [
-        f"{adf_result[0]:.4f}",
-        f"{adf_result[1]:.4f}",
-        f"{adf_result[4]['1%']:.4f}",
-        f"{adf_result[4]['5%']:.4f}",
-        f"{adf_result[4]['10%']:.4f}"
-    ]
-})
-st.table(adf_df)
+# Stationarity test (on training data)
+st.subheader("🔍 Stationarity Tests (ADF & KPSS) - Training Data")
 
-if adf_result[1] < 0.05:
-    st.success("✅ The returns series is **stationary** (p-value < 0.05). We can proceed with ARIMA.")
+col1, col2 = st.columns(2)
+
+with col1:
+    st.markdown("**ADF Test** (H₀: Non-stationary)")
+    adf_result = adfuller(train_df['Returns'].dropna())
+    adf_df = pd.DataFrame({
+        'Metric': ['ADF Statistic', 'p-value', 'Critical Value (1%)', 'Critical Value (5%)', 'Critical Value (10%)'],
+        'Value': [
+            f"{adf_result[0]:.4f}",
+            f"{adf_result[1]:.4f}",
+            f"{adf_result[4]['1%']:.4f}",
+            f"{adf_result[4]['5%']:.4f}",
+            f"{adf_result[4]['10%']:.4f}"
+        ]
+    })
+    st.table(adf_df)
+
+with col2:
+    st.markdown("**KPSS Test** (H₀: Stationary)")
+    kpss_result = kpss(train_df['Returns'].dropna(), regression='c', nlags='auto')
+    kpss_df = pd.DataFrame({
+        'Metric': ['KPSS Statistic', 'p-value', 'Critical Value (1%)', 'Critical Value (5%)', 'Critical Value (10%)'],
+        'Value': [
+            f"{kpss_result[0]:.4f}",
+            f"{kpss_result[1]:.4f}",
+            f"{kpss_result[3]['1%']:.4f}",
+            f"{kpss_result[3]['5%']:.4f}",
+            f"{kpss_result[3]['10%']:.4f}"
+        ]
+    })
+    st.table(kpss_df)
+
+# Combined interpretation
+adf_stationary = adf_result[1] < 0.05
+kpss_stationary = kpss_result[1] > 0.05
+
+if adf_stationary and kpss_stationary:
+    st.success("✅ Both ADF and KPSS tests confirm the series is **stationary**. We can proceed with ARIMA.")
+elif adf_stationary and not kpss_stationary:
+    st.warning("⚠️ ADF suggests stationary, but KPSS suggests non-stationary. Series may be trend-stationary.")
+elif not adf_stationary and kpss_stationary:
+    st.warning("⚠️ ADF suggests non-stationary, but KPSS suggests stationary. Results are inconclusive.")
 else:
-    st.warning("⚠️ The returns series may be **non-stationary**. Consider increasing differencing (d).")
+    st.error("❌ Both tests suggest the series is **non-stationary**. Consider increasing differencing (d).")
 
-# ACF and PACF plots
-st.subheader("📊 ACF and PACF Plots")
+# ACF and PACF plots (training data)
+st.subheader("📊 ACF and PACF Plots (Training Data)")
 col1, col2 = st.columns(2)
 
 with col1:
     fig_acf, ax_acf = plt.subplots(figsize=(8, 4))
-    acf_vals = acf(df['Returns'].dropna(), nlags=20)
+    acf_vals = acf(train_df['Returns'].dropna(), nlags=20)
     ax_acf.bar(range(len(acf_vals)), acf_vals, color='steelblue')
-    ax_acf.axhline(y=1.96/np.sqrt(len(df)), color='red', linestyle='--')
-    ax_acf.axhline(y=-1.96/np.sqrt(len(df)), color='red', linestyle='--')
+    ax_acf.axhline(y=1.96/np.sqrt(len(train_df)), color='red', linestyle='--')
+    ax_acf.axhline(y=-1.96/np.sqrt(len(train_df)), color='red', linestyle='--')
     ax_acf.set_xlabel('Lag')
     ax_acf.set_ylabel('ACF')
     ax_acf.set_title('Autocorrelation Function (ACF)')
@@ -344,34 +397,44 @@ with col1:
 
 with col2:
     fig_pacf, ax_pacf = plt.subplots(figsize=(8, 4))
-    pacf_vals = pacf(df['Returns'].dropna(), nlags=20)
+    pacf_vals = pacf(train_df['Returns'].dropna(), nlags=20)
     ax_pacf.bar(range(len(pacf_vals)), pacf_vals, color='darkorange')
-    ax_pacf.axhline(y=1.96/np.sqrt(len(df)), color='red', linestyle='--')
-    ax_pacf.axhline(y=-1.96/np.sqrt(len(df)), color='red', linestyle='--')
+    ax_pacf.axhline(y=1.96/np.sqrt(len(train_df)), color='red', linestyle='--')
+    ax_pacf.axhline(y=-1.96/np.sqrt(len(train_df)), color='red', linestyle='--')
     ax_pacf.set_xlabel('Lag')
     ax_pacf.set_ylabel('PACF')
     ax_pacf.set_title('Partial Autocorrelation Function (PACF)')
     st.pyplot(fig_pacf)
 
-# Fit ARIMA model
+# Fit ARIMA model on training data
 st.subheader(f"📈 ARIMA({arima_p},{arima_d},{arima_q}) Model Results")
 
 try:
-    arima_model = ARIMA(df['Returns'].dropna(), order=(arima_p, arima_d, arima_q)).fit()
+    # Train on training data
+    arima_model = ARIMA(train_df['Returns'].dropna().values, order=(arima_p, arima_d, arima_q)).fit()
+    
+    # Out-of-sample evaluation
+    test_returns = test_df['Returns'].dropna().values
+    arima_forecast_test = arima_model.forecast(steps=len(test_returns))
+    arima_mae_test = np.mean(np.abs(test_returns - arima_forecast_test))
+    arima_rmse_test = np.sqrt(np.mean((test_returns - arima_forecast_test)**2))
     
     col1, col2 = st.columns(2)
     
     with col1:
-        st.write("**Model Summary:**")
+        st.write("**Model Summary (Trained on 80% data):**")
         st.write(f"- AIC: {arima_model.aic:.4f}")
         st.write(f"- BIC: {arima_model.bic:.4f}")
         st.write(f"- Log Likelihood: {arima_model.llf:.4f}")
+        st.write(f"- **Out-of-sample MAE:** {arima_mae_test:.4f}")
+        st.write(f"- **Out-of-sample RMSE:** {arima_rmse_test:.4f}")
         
         # Coefficients
         st.write("**Coefficients:**")
+        param_names = ['ar.L1', 'ma.L1', 'sigma2'] if arima_p == 1 and arima_q == 1 else list(range(len(arima_model.params)))
         arima_coef_df = pd.DataFrame({
+            'Parameter': param_names[:len(arima_model.params)],
             'Coefficient': arima_model.params,
-            'Std Error': arima_model.bse,
             'p-Value': arima_model.pvalues
         })
         st.table(arima_coef_df.round(4))
@@ -382,7 +445,7 @@ try:
         forecast = arima_model.forecast(steps=forecast_horizon)
         forecast_df = pd.DataFrame({
             'Day': range(1, forecast_horizon + 1),
-            'Forecasted Return (%)': forecast.values
+            'Forecasted Return (%)': forecast
         })
         st.table(forecast_df.round(4))
     
@@ -433,24 +496,33 @@ We fit a **GARCH({garch_p},{garch_q})** model to forecast **volatility** of XLE 
 The GARCH model captures **volatility clustering** - periods of high volatility tend to be followed by high volatility.
 
 $$\\sigma_t^2 = \\omega + \\alpha_1 \\varepsilon_{{t-1}}^2 + \\beta_1 \\sigma_{{t-1}}^2$$
+
+**Note:** Model is trained on 80% of data, validated on remaining 20%.
 """)
 
-# Fit GARCH model
+# Fit GARCH model on training data
 try:
-    # Scale returns for numerical stability
-    returns_scaled = df['Returns'].dropna() 
+    # Use training data
+    train_returns = train_df['Returns'].dropna()
+    test_returns = test_df['Returns'].dropna()
     
-    garch_spec = arch_model(returns_scaled, vol='Garch', p=garch_p, q=garch_q, mean='Constant')
+    garch_spec = arch_model(train_returns, vol='Garch', p=garch_p, q=garch_q, mean='Constant')
     garch_model = garch_spec.fit(disp='off')
+    
+    # Out-of-sample evaluation
+    garch_forecast_test = garch_model.forecast(horizon=len(test_returns))
+    predicted_vol_test = np.sqrt(garch_forecast_test.variance.iloc[-1].values).mean()
+    actual_vol_test = test_returns.std()
     
     col1, col2 = st.columns(2)
     
     with col1:
         st.subheader("📊 GARCH Model Results")
-        st.write(f"**Model:** GARCH({garch_p},{garch_q})")
+        st.write(f"**Model:** GARCH({garch_p},{garch_q}) - Trained on {len(train_returns)} obs")
         st.write(f"**AIC:** {garch_model.aic:.4f}")
         st.write(f"**BIC:** {garch_model.bic:.4f}")
-        st.write(f"**Log Likelihood:** {garch_model.loglikelihood:.4f}")
+        st.write(f"**Predicted Test Volatility:** {predicted_vol_test:.4f}%")
+        st.write(f"**Actual Test Volatility:** {actual_vol_test:.4f}%")
         
         # Parameters
         st.write("**Parameters:**")
@@ -473,27 +545,27 @@ try:
         })
         st.table(forecast_vol_df.round(4))
     
-    # Conditional volatility plot
-    st.subheader("📈 Conditional Volatility Over Time")
+    # Conditional volatility plot (training data)
+    st.subheader("📈 Conditional Volatility Over Time (Training Period)")
     cond_vol = garch_model.conditional_volatility
     
     fig_vol, ax_vol = plt.subplots(figsize=(12, 5))
-    ax_vol.plot(df.index[-len(cond_vol):], cond_vol, color='red', linewidth=1)
+    ax_vol.plot(train_df.index[-len(cond_vol):], cond_vol, color='red', linewidth=1)
     ax_vol.set_xlabel('Date')
     ax_vol.set_ylabel('Conditional Volatility (%)')
-    ax_vol.set_title('GARCH Conditional Volatility (XLE)')
+    ax_vol.set_title('GARCH Conditional Volatility (XLE) - Training Period')
     ax_vol.grid(True, alpha=0.3)
     st.pyplot(fig_vol)
     
     # Returns with volatility bands
-    st.subheader("📊 Returns with Volatility Bands")
+    st.subheader("📊 Returns with Volatility Bands (Training Period)")
     fig_bands, ax_bands = plt.subplots(figsize=(12, 5))
     
-    returns_plot = df['Returns'].iloc[-len(cond_vol):]
-    ax_bands.plot(df.index[-len(cond_vol):], returns_plot, color='blue', linewidth=0.5, alpha=0.7, label='Returns')
-    ax_bands.plot(df.index[-len(cond_vol):], 2*cond_vol, color='red', linewidth=1, label='+2σ')
-    ax_bands.plot(df.index[-len(cond_vol):], -2*cond_vol, color='red', linewidth=1, label='-2σ')
-    ax_bands.fill_between(df.index[-len(cond_vol):], -2*cond_vol, 2*cond_vol, color='red', alpha=0.1)
+    returns_plot = train_df['Returns'].iloc[-len(cond_vol):]
+    ax_bands.plot(train_df.index[-len(cond_vol):], returns_plot, color='blue', linewidth=0.5, alpha=0.7, label='Returns')
+    ax_bands.plot(train_df.index[-len(cond_vol):], 2*cond_vol, color='red', linewidth=1, label='+2σ')
+    ax_bands.plot(train_df.index[-len(cond_vol):], -2*cond_vol, color='red', linewidth=1, label='-2σ')
+    ax_bands.fill_between(train_df.index[-len(cond_vol):], -2*cond_vol, 2*cond_vol, color='red', alpha=0.1)
     ax_bands.set_xlabel('Date')
     ax_bands.set_ylabel('Returns / Volatility (%)')
     ax_bands.set_title('XLE Returns with GARCH Volatility Bands (±2σ)')
@@ -604,3 +676,4 @@ st.markdown("""
     <p>University College Dublin | Academic Year 2025/2026</p>
 </div>
 """, unsafe_allow_html=True)
+
