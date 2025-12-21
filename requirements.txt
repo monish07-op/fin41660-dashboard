@@ -1,7 +1,27 @@
-streamlit
-pandas
-numpy
-yfinance
-matplotlib
-statsmodels
-arch
+# FIN41660 Financial Econometrics - Group Project
+# Time Series Forecasting Dashboard
+# Requirements File
+
+# Web Framework
+streamlit>=1.30.0
+
+# Data Manipulation
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Statistical Models
+statsmodels>=0.14.0
+arch>=6.0.0
+scipy>=1.10.0
+
+# Data Source
+yfinance>=0.2.0
+
+# Visualization
+matplotlib>=3.7.0
+
+# Installation Instructions:
+# pip install -r requirements.txt
+#
+# Or install individually:
+# pip install streamlit pandas numpy statsmodels arch scipy yfinance matplotlib
